@@ -27,6 +27,25 @@ type Product struct {
 	code string
 }
 
+func GormJWTInjector(db *gorm.DB) func(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+
+			if userToken := c.Get("user"); userToken != nil {
+				claims := userToken.(*jwt.Token).Claims.(jwt.MapClaims)
+				user := User{
+					gorm.Model{
+						ID: uint(claims["id"].(float64)),
+					},
+				}
+				db = db.Set("audited:current_user", user)
+				c.Set(gromDB, db)
+			}
+			return next(c)
+		}
+	}
+}
+
 func main() {
 	e := echo.New()
 	db := initDB()
@@ -43,7 +62,7 @@ func main() {
 		SigningKey: []byte("secret"),
 	}))
 
-	e.Use(gormJWTInjector(db))
+	e.Use(GormJWTInjector(db))
 
 	// apis
 	e.POST("/create-product", func(c echo.Context) error {
@@ -76,23 +95,4 @@ func createToken(id int) (string, error) {
 	claims["exp"] = time.Now().Add(time.Hour * 24 * 10).Unix()
 	t, err := token.SignedString([]byte("secret"))
 	return t, err
-}
-
-func gormJWTInjector(db *gorm.DB) func(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-
-			if userToken := c.Get("user"); userToken != nil {
-				claims := userToken.(*jwt.Token).Claims.(jwt.MapClaims)
-				user := User{
-					gorm.Model{
-						ID: uint(claims["id"].(float64)),
-					},
-				}
-				db = db.Set("audited:current_user", user)
-				c.Set(gromDB, db)
-			}
-			return next(c)
-		}
-	}
 }
