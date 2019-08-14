@@ -27,7 +27,7 @@ type Product struct {
 	code string
 }
 
-func GormJWTInjector(db *gorm.DB) func(next echo.HandlerFunc) echo.HandlerFunc {
+func GormJWTInjector(db *gorm.DB) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 
