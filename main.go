@@ -2,24 +2,16 @@ package main
 
 import (
 	"github.com/dgrijalva/jwt-go"
-	"github.com/labstack/echo/middleware"
+	"github.com/labstack/echo/v4/middleware"
+	"github.com/mhewedy/echo-xmiddleware/xmiddleware"
 	"github.com/qor/audited"
 	"net/http"
 	"time"
 
 	"github.com/jinzhu/gorm"
 	_ "github.com/jinzhu/gorm/dialects/sqlite"
-	"github.com/labstack/echo"
+	"github.com/labstack/echo/v4"
 )
-
-const (
-	getTokenURL = "/get-token"
-	gromDB      = "gorm.db"
-)
-
-type User struct {
-	gorm.Model
-}
 
 type Product struct {
 	gorm.Model
@@ -27,72 +19,57 @@ type Product struct {
 	code string
 }
 
-func GormJWTInjector(db *gorm.DB) echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-
-			if userToken := c.Get("user"); userToken != nil {
-				claims := userToken.(*jwt.Token).Claims.(jwt.MapClaims)
-				user := User{
-					gorm.Model{
-						ID: uint(claims["id"].(float64)),
-					},
-				}
-				db = db.Set("audited:current_user", user)
-				c.Set(gromDB, db)
-			}
-			return next(c)
-		}
-	}
-}
-
 func main() {
 	e := echo.New()
-	db := initDB()
+	db := initDatabase()
 	defer db.Close()
 
 	// JWT middleware
 	e.Use(middleware.JWTWithConfig(middleware.JWTConfig{
 		Skipper: func(c echo.Context) bool {
-			if c.Request().URL.String() == getTokenURL {
+			if c.Request().URL.String() == "/get-token" {
 				return true
 			}
 			return false
 		},
 		SigningKey: []byte("secret"),
 	}))
+	// GormAudit middleware, depends on registration of middleware.JWT
+	// Allow injecting CreatedBy and UpdatedBy into the db fields
+	e.Use(xmiddleware.GormAudit(db))
 
-	e.Use(GormJWTInjector(db))
+	// APIs
+	e.GET("/get-token", createToken)
+	// HasRole middleware, depends on registration of middleware.JWT
+	e.POST("/create-product", createProduct, xmiddleware.HasRole("admin"))
 
-	// apis
-	e.POST("/create-product", func(c echo.Context) error {
-		db := c.Get(gromDB).(*gorm.DB)
-		db.Create(&Product{code: "my-prod-code"})
-		return c.String(http.StatusOK, "Hello, World!")
-	})
-
-	e.GET(getTokenURL, func(c echo.Context) error {
-		token, _ := createToken(101)
-		return c.JSON(http.StatusOK, map[string]string{"message": token})
-	})
+	// start
 	e.Logger.Fatal(e.Start(":1323"))
 }
 
-func initDB() *gorm.DB {
+func initDatabase() *gorm.DB {
 	db, err := gorm.Open("sqlite3", "test.db")
 	if err != nil {
 		panic(err)
 	}
 	audited.RegisterCallbacks(db)
-	db.AutoMigrate(&User{}, &Product{})
+	db.AutoMigrate(&Product{})
 	return db
 }
 
-func createToken(id int) (string, error) {
-	token := jwt.New(jwt.SigningMethodHS256)
-	claims := token.Claims.(jwt.MapClaims)
-	claims["id"] = id
+func createToken(c echo.Context) error {
+	newJwt := jwt.New(jwt.SigningMethodHS256)
+	claims := newJwt.Claims.(jwt.MapClaims)
+	claims["id"] = 101
 	claims["exp"] = time.Now().Add(time.Hour * 24 * 10).Unix()
-	t, err := token.SignedString([]byte("secret"))
-	return t, err
+	claims["roles"] = [...]string{"admin"}
+	token, _ := newJwt.SignedString([]byte("secret"))
+	return c.JSON(http.StatusOK, map[string]string{"id_token": token})
+}
+
+var createProduct = func(c echo.Context) error {
+	db := xmiddleware.GetGormDB(c)
+	product := Product{code: "my-prod-code"}
+	db.Create(&product)
+	return c.JSON(http.StatusOK, &product)
 }
